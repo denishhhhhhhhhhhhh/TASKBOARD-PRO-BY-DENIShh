@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<title>TASKBOARD PRO</title>
+<style>
+body{font-family:Arial;background:#1e1e1e;color:white;margin:0;padding:0;transition:0.3s;background-size:cover;background-position:center;}
+.container{max-width:800px;margin:auto;padding:10px;text-align:center;}
+button,input,select{padding:6px 10px;margin:4px;border:none;border-radius:5px;}
+ul{list-style:none;padding:0;}
+li{background:#2c2c2c;margin:10px;padding:12px;border-radius:10px;text-align:left;}
+.comment{background:#1a1a1a;margin:4px 0;padding:4px;border-radius:4px;}
+input[type=file]{margin:5px 0;}
+.bg-btn{margin:3px;padding:5px 10px;}
+.hidden{display:none;}
+img,a.file-link{max-width:100px;display:block;margin-top:4px;}
+.progress-container{margin:5px 0;display:flex;align-items:center;gap:5px;}
+.progress-bar{flex:1;height:20px;background:#444;border-radius:10px;overflow:hidden;}
+.progress-fill{height:100%;width:0%;transition:0.3s;background:#1e90ff;}
+.status-not-started{color:gray;font-weight:bold;}
+.status-in-progress{color:#1e90ff;font-weight:bold;}
+.status-completed{color:limegreen;font-weight:bold;}
+@media(max-width:600px){
+  .container{width:95%;}
+  button,input,select{width:100%;margin:4px 0;}
+  .progress-container{flex-direction:column;align-items:flex-start;gap:2px;}
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>TASKBOARD PRO</h1>
+
+<p>Фон: 
+<button class="bg-btn" onclick="changeBG('#000000')">Чорний</button>
+<button class="bg-btn" onclick="changeBG('#ffffff')">Білий</button>
+<button class="bg-btn" onclick="changeBG('#1e6f1e')">Зелений</button>
+<button class="bg-btn" onclick="changeBG('#808080')">Сірий</button>
+<button class="bg-btn" onclick="changeBG('#1e90ff')">Блакитний</button>
+<br>
+<input type="file" id="bgUpload" onchange="uploadBG(this)" accept="image/*">
+</p>
+
+<div id="pageLogin">
+<h2>Реєстрація / Вхід</h2>
+<input id="nickInput" placeholder="Нік">
+<input type="password" id="pinInput" placeholder="PIN"><br>
+<button onclick="login()">Увійти</button>
+<button id="resetBtn" onclick="resetAll()" style="display:none;">Очистити всі групи та користувачів (крім Admin)</button>
+</div>
+
+<div id="pageGroups" class="hidden">
+<p>Користувач: <b id="userName"></b> <button onclick="logout()">Вийти</button></p>
+
+<h3>Всі акаунти</h3>
+<ul id="userList"></ul>
+
+<h3>Запрошення до груп</h3>
+<ul id="inviteList"></ul>
+
+<h2>Мої групи</h2>
+<ul id="myGroupList"></ul>
+
+<h2>Доступні групи</h2>
+<select id="groupSelect"></select>
+<input id="inviteUser" placeholder="Нік користувача">
+<button onclick="inviteToSelectedGroup()">Запросити</button>
+
+<h2>Створити нову групу</h2>
+<input id="groupName" placeholder="Назва групи">
+<button onclick="createGroup()">Створити групу</button>
+</div>
+
+<div id="pageTasks" class="hidden">
+<p><button onclick="backToGroups()">⬅ До груп</button></p>
+<h3 id="groupTitle"></h3>
+<p>Учасники: <span id="groupMembers"></span></p>
+<input id="taskInput" placeholder="Нова задача">
+<input type="file" id="taskFile">
+<button onclick="addTask()">Додати</button>
+<ul id="taskList"></ul>
+</div>
+
+<script>
+// Дані
+let nick = localStorage.getItem("nick")||null;
+let users = JSON.parse(localStorage.getItem("users")||"[]");
+let pins = JSON.parse(localStorage.getItem("pins")||"{}");
+let groups = JSON.parse(localStorage.getItem("groups")||"[]");
+let invites = JSON.parse(localStorage.getItem("invites")||"{}");
+let currentGroup = null;
+
+// Фон
+if(localStorage.getItem("customBG")) document.body.style.backgroundImage=`url(${localStorage.getItem("customBG")})`;
+function uploadBG(input){
+  if(input.files && input.files[0]){
+    const reader = new FileReader();
+    reader.onload=e=>{
+      document.body.style.backgroundImage=`url(${e.target.result})`;
+      localStorage.setItem("customBG", e.target.result);
+    }
+    reader.readAsDataURL(input.files[0]);
+  }
+}
+function changeBG(color){document.body.style.backgroundColor=color; document.body.style.backgroundImage="";}
+
+// Хеш PIN
+async function hashPIN(pin){
+  const encoder=new TextEncoder();
+  const data=encoder.encode(pin);
+  const hash=await crypto.subtle.digest('SHA-256',data);
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+// Ініціалізація Admin
+(async()=>{
+  if(!users.includes("Admin")){ 
+    users.push("Admin"); 
+    pins["Admin"]=await hashPIN("123456789"); 
+    saveData();
+  }
+})();
+
+function saveData(){
+  localStorage.setItem("users",JSON.stringify(users));
+  localStorage.setItem("pins",JSON.stringify(pins));
+  localStorage.setItem("groups",JSON.stringify(groups));
+  localStorage.setItem("invites",JSON.stringify(invites));
+}
+
+function showPage(id){document.querySelectorAll("#pageLogin,#pageGroups,#pageTasks").forEach(p=>p.classList.add("hidden")); document.getElementById(id).classList.remove("hidden");}
+function checkAdminButton(){document.getElementById("resetBtn").style.display=(nick==="Admin")?"inline-block":"none";}
+
+// Логін
+async function login(){
+  let n=document.getElementById("nickInput").value.trim();
+  let p=document.getElementById("pinInput").value.trim();
+  if(!n||!p)return alert("Введіть нік та PIN");
+  let pinHash = await hashPIN(p);
+  if(users.includes(n)){
+    if(pins[n]!==pinHash) return alert("Невірний PIN");
+  } else { users.push(n); pins[n]=pinHash; saveData();}
+  nick=n; localStorage.setItem("nick",nick);
+  document.getElementById("userName").textContent=nick;
+  showPage("pageGroups"); renderAllLists(); checkAdminButton();
+}
+
+function logout(){localStorage.removeItem("nick"); nick=null; showPage("pageLogin");}
+function resetAll(){if(nick!=="Admin") return alert("Тільки Admin"); if(!confirm("Видалити всі групи та користувачів (крім Admin)?")) return; groups=[]; users=["Admin"]; pins={"Admin":pins["Admin"]}; invites={}; saveData(); showPage("pageLogin"); alert("Очищено");}
+
+// Групи
+function createGroup(){
+  let name=document.getElementById("groupName").value.trim();
+  if(!name) return;
+  groups.push({name:name,owner:nick,members:[nick],tasks:[]});
+  document.getElementById("groupName").value="";
+  saveData(); renderAllLists();
+}
+
+function renderAllLists(){renderUsers(); renderInvites(); renderMyGroups(); renderGroupSelect();}
+
+// Всі користувачі
+function renderUsers(){
+  let ul=document.getElementById("userList"); ul.innerHTML="";
+  users.forEach(u=>{
+    let li=document.createElement("li"); li.textContent=u;
+    if(u!=="Admin" && nick==="Admin"){
+      let btn=document.createElement("button"); btn.textContent="Видалити"; 
+      btn.onclick=()=>{if(confirm(`Видалити користувача ${u}?`)){users=users.filter(x=>x!==u); delete pins[u]; if(invites[u]) delete invites[u]; saveData(); renderAllLists();}}
+      li.appendChild(btn);
+    }
+    ul.appendChild(li);
+  });
+}
+
+// Мої групи
+function renderMyGroups(){
+  let ul=document.getElementById("myGroupList"); ul.innerHTML="";
+  groups.forEach((g,i)=>{
+    if(g.members.includes(nick)){
+      let li=document.createElement("li");
+      li.innerHTML=`<b>${g.name}</b> (Власник: ${g.owner}) `;
+      if(nick===g.owner||nick==="Admin"){
+        let btn=document.createElement("button"); btn.textContent="Видалити"; 
+        btn.onclick=()=>{if(confirm(`Видалити групу ${g.name}?`)){groups.splice(i,1); saveData(); renderAllLists();}}
+        li.appendChild(btn);
+      }
+      let openBtn=document.createElement("button"); openBtn.textContent="Відкрити"; openBtn.onclick=()=>openGroup(i);
+      li.appendChild(openBtn); ul.appendChild(li);
+    }
+  });
+}
+
+// Вибір групи для запрошення
+function renderGroupSelect(){
+  let select=document.getElementById("groupSelect"); select.innerHTML="";
+  groups.forEach((g,i)=>{
+    if(nick===g.owner||nick==="Admin"){ let opt=document.createElement("option"); opt.value=i; opt.textContent=g.name; select.appendChild(opt);}
+  });
+}
+
+// Запрошення
+function renderInvites(){
+  let ul=document.getElementById("inviteList"); ul.innerHTML="";
+  if(invites[nick] && invites[nick].length>0){
+    invites[nick].forEach(i=>{
+      let li=document.createElement("li"); li.textContent = groups[i].name+" ";
+      let btn=document.createElement("button"); btn.textContent="Прийняти";
+      btn.onclick=()=>{groups[i].members.push(nick); invites[nick]=invites[nick].filter(x=>x!==i); saveData(); renderAllLists();}
+      li.appendChild(btn); ul.appendChild(li);
+    });
+  } else { let li=document.createElement("li"); li.textContent="Немає нових запрошень"; ul.appendChild(li);}
+}
+
+function inviteToSelectedGroup(){
+  let userNick=document.getElementById("inviteUser").value.trim();
+  let groupIndex=parseInt(document.getElementById("groupSelect").value);
+  if(!userNick) return alert("Введіть нік користувача");
+  if(!users.includes(userNick)) return alert("Користувача не існує");
+  if(!invites[userNick]) invites[userNick]=[];
+  if(!invites[userNick].includes(groupIndex)) invites[userNick].push(groupIndex);
+  saveData(); alert(userNick+" отримав запрошення до групи "+groups[groupIndex].name);
+  document.getElementById("inviteUser").value=""; renderInvites();
+}
+
+// Задачі
+function openGroup(i){
+  currentGroup=i;
+  document.getElementById("groupTitle").textContent="Група: "+groups[i].name;
+  // Учасники з кнопками видалення
+  let membersSpan=document.getElementById("groupMembers"); membersSpan.innerHTML="";
+  groups[i].members.forEach(member=>{
+    let span=document.createElement("span"); span.textContent=member+" ";
+    if((nick===groups[i].owner||nick==="Admin") && member!==groups[i].owner){
+      let btn=document.createElement("button"); btn.textContent="❌"; btn.style.marginLeft="3px";
+      btn.onclick=()=>removeMember(i,member);
+      span.appendChild(btn);
+    }
+    membersSpan.appendChild(span);
+  });
+  showPage("pageTasks"); renderTasks();
+}
+
+function removeMember(groupIndex, member){
+  if(!confirm(`Видалити користувача ${member} з групи?`)) return;
+  groups[groupIndex].members=groups[groupIndex].members.filter(m=>m!==member);
+  saveData(); openGroup(groupIndex);
+}
+
+function backToGroups(){showPage("pageGroups"); currentGroup=null; renderAllLists();}
+
+function readFile(file,callback){let reader=new FileReader(); reader.onload=e=>callback(e.target.result); reader.readAsDataURL(file);}
+function addTask(){
+  if(currentGroup===null) return;
+  let text=document.getElementById("taskInput").value.trim(); if(!text) return;
+  let file=document.getElementById("taskFile").files[0];
+  if(file){readFile(file,data=>{groups[currentGroup].tasks.push({text:text,author:nick,status:"Не розпочато",comments:[],file:data,fileName:file.name,progress:0}); saveData(); renderTasks();});}
+  else{groups[currentGroup].tasks.push({text:text,author:nick,status:"Не розпочато",comments:[],file:null,progress:0}); saveData(); renderTasks();}
+  document.getElementById("taskInput").value=""; document.getElementById("taskFile").value="";
+}
+
+function addComment(taskIndex){
+  let input=document.getElementById("comment"+taskIndex);
+  let fileInput=document.getElementById("commentFile"+taskIndex);
+  let text=input.value.trim(); if(!text) return;
+  let file=fileInput.files[0];
+  if(file){readFile(file,data=>{groups[currentGroup].tasks[taskIndex].comments.push({user:nick,text:text,file:data,fileName:file.name}); saveData(); renderTasks();});}
+  else{groups[currentGroup].tasks[taskIndex].comments.push({user:nick,text:text,file:null}); saveData(); renderTasks();}
+  input.value=""; if(fileInput) fileInput.value="";
+}
+
+function updateStatus(t){if(t.progress===100) t.status="Завершено"; else if(t.progress>0) t.status="В процесі"; else t.status="Не розпочато";}
+
+function renderTasks(){
+  if(currentGroup===null) return;
+  let list=document.getElementById("taskList"); list.innerHTML="";
+  groups[currentGroup].tasks.forEach((t,i)=>{
+    let li=document.createElement("li");
+    let textNode=document.createElement("b"); textNode.textContent=t.text; li.appendChild(textNode); li.appendChild(document.createElement("br"));
+    if(t.file){let a=document.createElement("a"); a.href=t.file; a.download=t.fileName||"file"; a.textContent=t.fileName||"Файл"; a.className="file-link"; li.appendChild(a);}
+    let authorNode=document.createElement("div"); authorNode.textContent="Автор: "+t.author; li.appendChild(authorNode);
+    // прогрес
+    let progressDiv=document.createElement("div"); progressDiv.className="progress-container";
+    let progressBar=document.createElement("div"); progressBar.className="progress-bar";
+    let progressFill=document.createElement("div"); progressFill.className="progress-fill"; progressFill.style.width=t.progress+"%";
+    progressBar.appendChild(progressFill); progressDiv.appendChild(progressBar);
+    let minusBtn=document.createElement("button"); minusBtn.textContent="–"; minusBtn.onclick=()=>{t.progress=Math.max(0,t.progress-10); updateStatus(t); saveData(); renderTasks();}
+    let plusBtn=document.createElement("button"); plusBtn.textContent="+"; plusBtn.onclick=()=>{t.progress=Math.min(100,t.progress+10); updateStatus(t); saveData(); renderTasks();}
+    let percentText=document.createElement("span"); percentText.textContent=" "+t.progress+"%";
+    progressDiv.appendChild(minusBtn); progressDiv.appendChild(plusBtn); progressDiv.appendChild(percentText);
+    li.appendChild(progressDiv);
+    let statusDiv=document.createElement("div"); statusDiv.textContent="Статус: "+t.status;
+    statusDiv.className=t.status==="Не розпочато"?"status-not-started":t.status==="В процесі"?"status-in-progress":"status-completed"; li.appendChild(statusDiv);
+    if(t.author===nick||nick==="Admin"){ let btn=document.createElement("button"); btn.textContent="Видалити"; btn.onclick=()=>{if(confirm(`Видалити задачу "${t.text}"?`)){groups[currentGroup].tasks.splice(i,1); saveData(); renderTasks();}}; li.appendChild(btn);}
+    // коментарі
+    let commentTitle=document.createElement("h4"); commentTitle.textContent="Коментарі"; li.appendChild(commentTitle);
+    t.comments.forEach((c,ci)=>{
+      let div=document.createElement("div"); div.className="comment";
+      let b=document.createElement("b"); b.textContent=c.user; div.appendChild(b);
+      div.appendChild(document.createTextNode(": "+c.text));
+      if(c.file){let a=document.createElement("a"); a.href=c.file; a.download=c.fileName||"file"; a.textContent=c.fileName||"Файл"; a.className="file-link"; div.appendChild(a);}
+      if(c.user===nick||nick==="Admin"){let btn=document.createElement("button"); btn.textContent="❌"; btn.onclick=()=>{t.comments.splice(ci,1); saveData(); renderTasks();}; div.appendChild(btn);}
+      li.appendChild(div);
+    });
+    let commentInput=document.createElement("input"); commentInput.id="comment"+i; commentInput.placeholder="Коментар"; li.appendChild(commentInput);
+    let commentFile=document.createElement("input"); commentFile.type="file"; commentFile.id="commentFile"+i; li.appendChild(commentFile);
+    let addBtn=document.createElement("button"); addBtn.textContent="Додати"; addBtn.onclick=()=>addComment(i); li.appendChild(addBtn);
+    list.appendChild(li);
+  });
+}
+
+if(nick){document.getElementById("userName").textContent=nick; showPage("pageGroups"); renderAllLists(); checkAdminButton();}
+</script>
+</body>
+</html>
